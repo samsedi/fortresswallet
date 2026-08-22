@@ -22,7 +22,12 @@
 //! architectures this wallet targets.
 
 use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
-use k256::ecdsa::{Signature, SigningKey, VerifyingKey};
+use k256::ecdsa::{SigningKey, VerifyingKey};
+
+/// Re-exported so downstream crates (`wallet-core`, ...) can name this
+/// type via `wallet_crypto::keys::Signature` without adding `k256` as
+/// their own direct dependency — k256 stays fully contained here.
+pub use k256::ecdsa::Signature;
 
 use crate::SecureRng;
 

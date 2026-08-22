@@ -16,3 +16,6 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 rand_core = { version = "0.6", default-features = false }
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "std"] }
 region = "3"
+
+[dev-dependencies]
+proptest = "1"
