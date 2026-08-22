@@ -7,11 +7,13 @@
 //!   - randomness for key material comes only through `SecureRng`, which
 //!     wraps the OS CSPRNG — never a seeded/deterministic RNG
 
+use k256::Scalar;
 use rand::rngs::OsRng;
 use rand_core::{CryptoRng, RngCore};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub mod keys;
+pub mod shamir;
 
 /// A fixed-size secret buffer that zeroizes on drop and never leaks its
 /// contents through Debug/Display.
@@ -43,6 +45,57 @@ impl<const N: usize> SecretBytes<N> {
 impl<const N: usize> std::fmt::Debug for SecretBytes<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "SecretBytes<{N}>(REDACTED)")
+    }
+}
+
+/// A secp256k1 scalar known to hold secret material — a private key, a
+/// Shamir polynomial coefficient, a reconstructed/accumulated secret, and
+/// so on. Zeroizes on drop automatically.
+///
+/// This exists so a secret-holding scalar can't be introduced as a bare
+/// `k256::Scalar` local with no cleanup guarantee at all, which is
+/// exactly the bug class a security audit caught in `shamir.rs`:
+/// polynomial coefficients and a reconstructed secret sitting as plain
+/// `Scalar` locals, wiped only if someone remembered to call `.zeroize()`
+/// by hand — and one instance where that memory-holding didn't happen.
+/// Wrapping the type makes cleanup automatic and impossible to forget,
+/// the same way `SecretBytes`/`PrivateKey` already do for byte buffers
+/// and the private key itself. `bytes_to_scalar` in `shamir.rs` is the
+/// single choke point where raw bytes become a secret scalar in this
+/// crate — returning `SecretScalar` there means every caller downstream
+/// gets the guarantee without having to opt in.
+///
+/// Residual, accepted risk: arithmetic (`+`, `*`, ...) still has to
+/// happen on the raw `k256::Scalar` obtained via `expose()`, since this
+/// type deliberately doesn't implement arithmetic traits itself — so a
+/// short-lived, unwrapped copy exists for the duration of one expression
+/// or one accumulation loop. This is the same class of shadow-copy
+/// limitation already documented on `PrivateKey` (construction
+/// temporaries) — the guardrail here targets *long-lived, named* secret
+/// locals that survive to a function's end, which is what the audited
+/// bug actually was, not every transient register-scale copy.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct SecretScalar(Scalar);
+
+impl SecretScalar {
+    /// Expose the raw scalar for one arithmetic expression. The result
+    /// has no zeroize guarantee of its own — use it briefly, then either
+    /// let it fall out of scope or immediately wrap the result back into
+    /// a `SecretScalar`.
+    pub fn expose(&self) -> Scalar {
+        self.0
+    }
+}
+
+impl From<Scalar> for SecretScalar {
+    fn from(scalar: Scalar) -> Self {
+        Self(scalar)
+    }
+}
+
+impl std::fmt::Debug for SecretScalar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SecretScalar(REDACTED)")
     }
 }
 
