@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/wallet-crypto",
+    "crates/wallet-core",
+    "crates/wallet-storage",
+    "crates/wallet-decoder",
+    "crates/wallet-rpc",
+    "crates/wallet-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+# Every crate that touches key material inherits these lints as errors,
+# not warnings, so an unsafe-in-the-wrong-place slip fails the build.
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"        # promote to "deny" once crate APIs stabilize
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }  # promote to "deny" once stable
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"

@@ -1,0 +1,14 @@
+[package]
+name = "wallet-storage"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wallet-crypto = { path = "../wallet-crypto" }
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+zeroize = "1"
+tempfile = "3"

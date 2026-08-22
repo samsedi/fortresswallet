@@ -1,0 +1,16 @@
+[package]
+name = "wallet-cli"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "fortresswallet"
+path = "src/main.rs"
+
+[dependencies]
+wallet-core = { path = "../wallet-core" }
+rpassword = "7"
+zeroize = "1"

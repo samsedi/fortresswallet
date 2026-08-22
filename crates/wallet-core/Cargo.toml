@@ -1,0 +1,10 @@
+[package]
+name = "wallet-core"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wallet-crypto = { path = "../wallet-crypto" }

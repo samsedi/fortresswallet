@@ -1,0 +1,39 @@
+[advisories]
+vulnerability = "deny"       # Fail on any known CVE
+unmaintained = "warn"        # Flag abandoned crates
+yanked = "deny"              # Fail on yanked versions
+notice = "warn"
+
+[licenses]
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+]
+copyleft = "deny"            # No GPL in a wallet binary
+
+[bans]
+multiple-versions = "warn"   # Flag duplicate crate versions
+wildcards = "deny"           # No wildcard version specs
+
+# Explicitly ban crates that are known footguns in crypto contexts
+deny = [
+    # Never use the old, unmaintained rust-crypto
+    { name = "rust-crypto", wrappers = [] },
+    # ring is fine but we standardized on RustCrypto; don't mix
+    { name = "ring", wrappers = [] },
+    # openssl bindings — we're pure Rust, no C FFI crypto
+    { name = "openssl", wrappers = [] },
+    { name = "openssl-sys", wrappers = [] },
+]
+
+[sources]
+unknown-registry = "deny"    # Only crates.io
+unknown-git = "deny"         # No random git dependencies
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []               # No git deps allowed

@@ -1,0 +1,17 @@
+[package]
+name = "wallet-crypto"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+# Deliberately minimal. This crate holds key material: no logging crate,
+# no network crate, no serde-derive-everything. Every addition here should
+# be justified in review, not pulled in for convenience.
+[dependencies]
+zeroize = { version = "1", features = ["derive"] }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng", "getrandom"] }
+rand_core = { version = "0.6", default-features = false }
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "std"] }
+region = "3"
