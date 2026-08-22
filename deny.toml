@@ -1,11 +1,14 @@
+# Schema for cargo-deny 0.20.x. The `[advisories]` fields `vulnerability`,
+# `unmaintained`, `yanked`, `notice` and the `[licenses]` fields
+# `unlicensed`/`copyleft` from older cargo-deny versions were removed
+# (see https://github.com/EmbarkStudios/cargo-deny/pull/611) — vulnerable
+# and yanked crates are hard-denied by default now, with exceptions listed
+# under `advisories.ignore`; unlicensed/copyleft crates are implicitly
+# denied because only what's in `licenses.allow` passes.
 [advisories]
-vulnerability = "deny"       # Fail on any known CVE
-unmaintained = "warn"        # Flag abandoned crates
-yanked = "deny"              # Fail on yanked versions
-notice = "warn"
+ignore = []
 
 [licenses]
-unlicensed = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -15,21 +18,27 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
 ]
-copyleft = "deny"            # No GPL in a wallet binary
+
+[licenses.private]
+# Workspace crates aren't published (all set publish = false in
+# Cargo.toml); don't require them to declare a license.
+ignore = true
 
 [bans]
 multiple-versions = "warn"   # Flag duplicate crate versions
 wildcards = "deny"           # No wildcard version specs
+# Workspace-internal path deps (wallet-core -> wallet-crypto, etc.) are
+# exempt now that every crate sets publish = false — cargo-deny only
+# grants this exemption to unpublishable crates, so it doesn't relax the
+# check for any external dependency.
+allow-wildcard-paths = true
 
 # Explicitly ban crates that are known footguns in crypto contexts
 deny = [
-    # Never use the old, unmaintained rust-crypto
-    { name = "rust-crypto", wrappers = [] },
-    # ring is fine but we standardized on RustCrypto; don't mix
-    { name = "ring", wrappers = [] },
-    # openssl bindings — we're pure Rust, no C FFI crypto
-    { name = "openssl", wrappers = [] },
-    { name = "openssl-sys", wrappers = [] },
+    { crate = "rust-crypto", reason = "old, unmaintained crate; do not use" },
+    { crate = "ring", reason = "workspace standardizes on RustCrypto (k256/aead); don't mix crypto libraries" },
+    { crate = "openssl", reason = "pure Rust crypto only, no C FFI" },
+    { crate = "openssl-sys", reason = "pure Rust crypto only, no C FFI" },
 ]
 
 [sources]

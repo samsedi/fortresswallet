@@ -12,6 +12,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# None of these are meant to be published to crates.io as standalone
+# crates — they're internal implementation crates of one wallet binary.
+publish = false
 
 # Every crate that touches key material inherits these lints as errors,
 # not warnings, so an unsafe-in-the-wrong-place slip fails the build.
