@@ -5,37 +5,48 @@
 //!
 //! It must NEVER silently pass through raw bytes for signing.
 //!
-//! Each test is `#[ignore]`d, not an empty no-op — see the note in
-//! `wallet-core/tests/architecture.rs` for why that distinction matters.
-//! When `wallet_decoder::decode` exists, un-ignore each test and fill in
-//! the real assertion; that's also the point to add `cargo-fuzz` against
-//! this same entry point, since it's the highest-value fuzz target in the
-//! wallet (it parses fully untrusted input, one call away from signing).
+//! These were `#[ignore]`d skeletons until `wallet_decoder::decode`
+//! existed — see `src/lib.rs`'s unit tests for the fuller coverage
+//! (truncated header, truncated calldata, unsupported version, exact
+//! error variants). These four are kept as the original external-API
+//! sanity check: proof the public `decode` function itself, called from
+//! outside the crate, rejects each category the module doc promises to.
+//!
+//! `cargo-fuzz` against this same entry point is still open follow-up
+//! work — it's the highest-value fuzz target in the wallet (fully
+//! untrusted input, one call away from signing) and hasn't been set up
+//! yet.
+
+use wallet_decoder::decode;
 
 #[test]
-#[ignore = "wallet_decoder::decode does not exist yet"]
 fn empty_input_rejected() {
-    // assert!(wallet_decoder::decode(b"").is_err());
+    assert!(decode(b"").is_err());
 }
 
 #[test]
-#[ignore = "wallet_decoder::decode does not exist yet"]
 fn truncated_calldata_rejected() {
-    // A valid function selector (4 bytes) but missing arguments
-    // assert!(wallet_decoder::decode(&[0xa9, 0x05, 0x9c, 0xbb]).is_err());
+    // Fewer bytes than the fixed header requires.
+    assert!(decode(&[0xa9, 0x05, 0x9c, 0xbb]).is_err());
 }
 
 #[test]
-#[ignore = "wallet_decoder::decode does not exist yet"]
 fn unknown_function_selector_rejected() {
-    // Random 4 bytes that don't match any known ABI
-    // assert!(wallet_decoder::decode(&[0xde, 0xad, 0xbe, 0xef]).is_err());
+    // This decoder doesn't parse function selectors (it isn't an ABI
+    // decoder — see the scope note in src/lib.rs), so the equivalent
+    // "unrecognized" case is any non-empty calldata at all: build a
+    // well-formed header, then append 4 bytes of calldata this decoder
+    // has no understanding of.
+    let mut raw = wallet_decoder::encode_transfer(1, [0xAB; 20], 42);
+    let len = raw.len();
+    raw[len - 2..].copy_from_slice(&4u16.to_be_bytes());
+    raw.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+
+    assert!(decode(&raw).is_err());
 }
 
 #[test]
-#[ignore = "wallet_decoder::decode does not exist yet"]
 fn oversized_input_rejected() {
-    // 100 KB of data — should be rejected, not parsed forever
-    // let huge = vec![0u8; 100_000];
-    // assert!(wallet_decoder::decode(&huge).is_err());
+    let huge = vec![0u8; 100_000];
+    assert!(decode(&huge).is_err());
 }
