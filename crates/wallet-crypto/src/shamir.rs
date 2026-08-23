@@ -72,6 +72,21 @@ impl Share {
     pub fn threshold(&self) -> u8 {
         self.threshold
     }
+
+    /// Raw share value bytes, for encrypted storage. Same `_dangerous`
+    /// convention as `PrivateKey::to_bytes_dangerous` — hand the result
+    /// straight to an AEAD-encrypting sink, never to a log or plain file.
+    pub fn to_bytes_dangerous(&self) -> [u8; 32] {
+        *self.value.expose()
+    }
+
+    /// Reconstruct a share from its public metadata plus raw value bytes
+    /// (e.g. decrypted from storage). No validation beyond byte length is
+    /// possible here — `reconstruct_and_verify`'s public-key check is
+    /// what ultimately catches a corrupted or wrong share.
+    pub fn from_parts_dangerous(index: u8, threshold: u8, bytes: [u8; 32]) -> Self {
+        Self { index, threshold, value: SecretBytes::from_array(bytes) }
+    }
 }
 
 /// Split `key` into `n` shares such that any `threshold` of them

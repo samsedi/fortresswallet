@@ -1,20 +1,26 @@
-//! Encrypted-at-rest persistence for private keys.
+//! Encrypted-at-rest persistence for private keys and Shamir shares.
 //!
 //! Format on disk: `version(1) || salt(16) || nonce(24) || ciphertext+tag`.
 //! The version byte lets a future format change (different KDF params,
 //! different AEAD, etc.) be detected and rejected explicitly instead of
 //! being misparsed as garbage or, worse, successfully-but-wrongly decoded.
+//! For a share, the plaintext inside that ciphertext is itself
+//! `index(1) || threshold(1) || value(32)` — the share's (non-secret)
+//! metadata travels inside the same AEAD envelope as its secret value
+//! rather than as an unencrypted header, so tampering with the index or
+//! threshold is caught by the same tag check instead of needing separate
+//! authenticated-associated-data plumbing.
 //!
 //! The encryption key is derived from a passphrase via Argon2id at
-//! hardened parameters (64 MiB / 3 passes / 4 lanes — see `argon2_params`),
+//! hardened parameters (64 MiB / 3 passes / 4 lanes — see `argon2()`),
 //! so brute-forcing a stolen file costs real time and memory per guess,
-//! not a raw SHA-hashed password. The private key bytes are then sealed
-//! with XChaCha20-Poly1305, an AEAD cipher: any bit-flip in the stored
-//! file is detected at decrypt time (the tag check fails closed) rather
-//! than silently decrypting into corrupted key material.
+//! not a raw SHA-hashed password. The plaintext is then sealed with
+//! XChaCha20-Poly1305, an AEAD cipher: any bit-flip in the stored file is
+//! detected at decrypt time (the tag check fails closed) rather than
+//! silently decrypting into corrupted key material.
 //!
-//! No key share is ever written to disk unencrypted, even transiently.
-//! Every buffer that briefly holds plaintext key bytes or the derived
+//! No key or share is ever written to disk unencrypted, even transiently.
+//! Every buffer that briefly holds plaintext bytes or the derived
 //! encryption key is wrapped in `Zeroizing` so it's wiped the moment it
 //! goes out of scope, not left for the allocator to overwrite later.
 
@@ -24,10 +30,12 @@ use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use zeroize::Zeroizing;
 
 use wallet_crypto::keys::{InvalidKeyBytes, PrivateKey};
+use wallet_crypto::shamir::Share;
 use wallet_crypto::SecureRng;
 
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
+const SHARE_PLAINTEXT_LEN: usize = 2 + 32; // index(1) + threshold(1) + value(32)
 
 /// Current on-disk format version. Bump this whenever the KDF params,
 /// AEAD scheme, or layout change, and add a migration/rejection path for
@@ -40,7 +48,7 @@ const FORMAT_VERSION: u8 = 1;
 /// belongs in the UI layer, not hardcoded here.
 const MIN_PASSPHRASE_LEN: usize = 12;
 
-/// Errors from sealing/opening an encrypted key file.
+/// Errors from sealing/opening an encrypted key or share file.
 #[derive(Debug)]
 pub enum StorageError {
     /// Wrong passphrase, or the ciphertext/file was tampered with —
@@ -54,7 +62,7 @@ pub enum StorageError {
     WeakPassphrase,
     /// The blob's format version byte doesn't match `FORMAT_VERSION`.
     UnsupportedVersion(u8),
-    /// Underlying filesystem error from `save_to_file`/`load_from_file`.
+    /// Underlying filesystem error from the `*_to_file`/`*_from_file` fns.
     Io(std::io::Error),
 }
 
@@ -93,13 +101,15 @@ fn derive_key(passphrase: &str, salt: &[u8; SALT_LEN]) -> Zeroizing<[u8; 32]> {
     out
 }
 
-/// Encrypt `key` under `passphrase`, returning
-/// `version || salt || nonce || ciphertext`.
+/// Encrypt arbitrary `plaintext` under `passphrase`, returning
+/// `version || salt || nonce || ciphertext`. The shared low-level
+/// primitive behind `seal` and `seal_share` — both differ only in what
+/// bytes they hand this function.
 ///
 /// # Panics
-/// Never in practice: the only internal `expect` covers AEAD encryption of
-/// a fixed 32-byte plaintext, which cannot fail for valid key/nonce sizes.
-pub fn seal(passphrase: &str, key: &PrivateKey) -> Result<Vec<u8>, StorageError> {
+/// Never in practice: the only internal `expect` covers AEAD encryption,
+/// which cannot fail for valid key/nonce sizes.
+fn seal_bytes(passphrase: &str, plaintext: &[u8]) -> Result<Vec<u8>, StorageError> {
     check_passphrase_strength(passphrase)?;
 
     let mut rng = SecureRng::new();
@@ -113,10 +123,7 @@ pub fn seal(passphrase: &str, key: &PrivateKey) -> Result<Vec<u8>, StorageError>
     let cipher = XChaCha20Poly1305::new(&Key::from(*derived));
     let nonce = XNonce::from(nonce_bytes);
 
-    let key_bytes = Zeroizing::new(key.to_bytes_dangerous());
-    let ciphertext = cipher
-        .encrypt(&nonce, key_bytes.as_slice())
-        .expect("encrypting a fixed 32-byte plaintext cannot fail");
+    let ciphertext = cipher.encrypt(&nonce, plaintext).expect("encrypting a fixed-length plaintext cannot fail");
 
     let mut out = Vec::with_capacity(1 + SALT_LEN + NONCE_LEN + ciphertext.len());
     out.push(FORMAT_VERSION);
@@ -126,14 +133,14 @@ pub fn seal(passphrase: &str, key: &PrivateKey) -> Result<Vec<u8>, StorageError>
     Ok(out)
 }
 
-/// Decrypt a blob produced by `seal`. Fails closed: a wrong passphrase or
-/// any tampering with the stored bytes returns `DecryptionFailed`, never
-/// a corrupted key.
+/// Decrypt a blob produced by `seal_bytes`. Fails closed: a wrong
+/// passphrase or any tampering with the stored bytes returns
+/// `DecryptionFailed`, never corrupted plaintext.
 ///
 /// # Panics
 /// Never in practice: the length checks above guarantee the salt slice is
 /// exactly `SALT_LEN` bytes before the internal `try_into().unwrap()` runs.
-pub fn open(passphrase: &str, blob: &[u8]) -> Result<PrivateKey, StorageError> {
+fn open_bytes(passphrase: &str, blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, StorageError> {
     if blob.is_empty() {
         return Err(StorageError::Truncated);
     }
@@ -154,50 +161,93 @@ pub fn open(passphrase: &str, blob: &[u8]) -> Result<PrivateKey, StorageError> {
     let nonce_arr: [u8; NONCE_LEN] = nonce_bytes.try_into().unwrap();
     let nonce = XNonce::from(nonce_arr);
 
-    let plaintext = Zeroizing::new(
-        cipher
-            .decrypt(&nonce, ciphertext)
-            .map_err(|_| StorageError::DecryptionFailed)?,
-    );
+    let plaintext = cipher.decrypt(&nonce, ciphertext).map_err(|_| StorageError::DecryptionFailed)?;
+    Ok(Zeroizing::new(plaintext))
+}
 
-    let bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
-        plaintext
-            .as_slice()
-            .try_into()
-            .map_err(|_| StorageError::Truncated)?,
-    );
+/// Encrypt `key` under `passphrase`.
+pub fn seal(passphrase: &str, key: &PrivateKey) -> Result<Vec<u8>, StorageError> {
+    let key_bytes = Zeroizing::new(key.to_bytes_dangerous());
+    seal_bytes(passphrase, key_bytes.as_slice())
+}
+
+/// Decrypt a blob produced by `seal`.
+pub fn open(passphrase: &str, blob: &[u8]) -> Result<PrivateKey, StorageError> {
+    let plaintext = open_bytes(passphrase, blob)?;
+    let bytes: Zeroizing<[u8; 32]> = Zeroizing::new(plaintext.as_slice().try_into().map_err(|_| StorageError::Truncated)?);
     Ok(PrivateKey::from_bytes_dangerous(&bytes)?)
 }
 
+/// Encrypt a Shamir `share` under `passphrase`. The share's index and
+/// threshold (public metadata) travel inside the same encrypted envelope
+/// as its secret value — see the module docs for why.
+pub fn seal_share(passphrase: &str, share: &Share) -> Result<Vec<u8>, StorageError> {
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(SHARE_PLAINTEXT_LEN));
+    plaintext.push(share.index());
+    plaintext.push(share.threshold());
+    plaintext.extend_from_slice(&share.to_bytes_dangerous());
+    seal_bytes(passphrase, &plaintext)
+}
+
+/// Decrypt a blob produced by `seal_share`.
+///
+/// # Panics
+/// Never in practice: the length check above guarantees the value slice
+/// is exactly 32 bytes before the internal `try_into().unwrap()` runs.
+pub fn open_share(passphrase: &str, blob: &[u8]) -> Result<Share, StorageError> {
+    let plaintext = open_bytes(passphrase, blob)?;
+    if plaintext.len() != SHARE_PLAINTEXT_LEN {
+        return Err(StorageError::Truncated);
+    }
+    let index = plaintext[0];
+    let threshold = plaintext[1];
+    let value: [u8; 32] = plaintext[2..].try_into().unwrap();
+    Ok(Share::from_parts_dangerous(index, threshold, value))
+}
+
 /// Writes atomically (write to a sibling temp file, fsync, rename over the
-/// target) so a crash mid-write can never leave a half-written key file —
-/// the rename either lands the whole new file or the old one stays intact.
-/// The temp file is created with 0600 permissions on Unix before any bytes
-/// are written, so the key is never briefly world-readable on disk.
-pub fn save_to_file(path: &std::path::Path, passphrase: &str, key: &PrivateKey) -> Result<(), StorageError> {
+/// target) so a crash mid-write can never leave a half-written file — the
+/// rename either lands the whole new file or the old one stays intact.
+/// The temp file is created with 0600 permissions on Unix before any
+/// bytes are written, so the file is never briefly world-readable on disk.
+fn write_atomic(path: &std::path::Path, blob: &[u8]) -> Result<(), StorageError> {
     use std::io::Write;
 
-    let blob = seal(passphrase, key)?;
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        tmp.as_file()
-            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        tmp.as_file().set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
 
-    tmp.write_all(&blob)?;
+    tmp.write_all(blob)?;
     tmp.as_file().sync_all()?;
     tmp.persist(path).map_err(|e| StorageError::Io(e.error))?;
     Ok(())
+}
+
+/// Seal `key` and write it atomically to `path` — see `write_atomic`.
+pub fn save_to_file(path: &std::path::Path, passphrase: &str, key: &PrivateKey) -> Result<(), StorageError> {
+    write_atomic(path, &seal(passphrase, key)?)
 }
 
 /// Read and decrypt a key file written by `save_to_file`.
 pub fn load_from_file(path: &std::path::Path, passphrase: &str) -> Result<PrivateKey, StorageError> {
     let blob = std::fs::read(path)?;
     open(passphrase, &blob)
+}
+
+/// Seal `share` and write it atomically to `path` — see `write_atomic`.
+pub fn save_share_to_file(path: &std::path::Path, passphrase: &str, share: &Share) -> Result<(), StorageError> {
+    write_atomic(path, &seal_share(passphrase, share)?)
+}
+
+/// Read and decrypt a share file written by `save_share_to_file`.
+pub fn load_share_from_file(path: &std::path::Path, passphrase: &str) -> Result<Share, StorageError> {
+    let blob = std::fs::read(path)?;
+    open_share(passphrase, &blob)
 }
 
 #[cfg(test)]
@@ -329,5 +379,77 @@ mod tests {
         // No stray temp files left behind in the directory afterward.
         let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn seal_share_then_open_share_preserves_metadata() {
+        let key = PrivateKey::generate();
+        let shares = wallet_crypto::shamir::split(&key, 2, 3).unwrap();
+
+        let blob = seal_share(PASS, &shares[0]).unwrap();
+        let restored = open_share(PASS, &blob).unwrap();
+
+        assert_eq!(restored.index(), shares[0].index());
+        assert_eq!(restored.threshold(), shares[0].threshold());
+        // Functional correctness (the restored share's *value* actually
+        // matches, not just its metadata) is checked separately in
+        // opened_share_reconstructs_correctly_with_its_siblings below —
+        // Share has no PartialEq/Clone (by design), so that's the only
+        // way to prove it.
+    }
+
+    #[test]
+    fn opened_share_reconstructs_correctly_with_its_siblings() {
+        let key = PrivateKey::generate();
+        let public_key = key.public_key();
+        let mut shares = wallet_crypto::shamir::split(&key, 2, 3).unwrap();
+
+        // Seal/open share 0, keep share 1 as-is; reconstruct from the pair.
+        let blob = seal_share(PASS, &shares[0]).unwrap();
+        let restored = open_share(PASS, &blob).unwrap();
+        shares[0] = restored;
+
+        let result = wallet_crypto::shamir::reconstruct_and_verify(&shares[0..2], &public_key).unwrap();
+        assert_eq!(result.public_key(), public_key);
+    }
+
+    #[test]
+    fn share_wrong_passphrase_fails_closed() {
+        let key = PrivateKey::generate();
+        let shares = wallet_crypto::shamir::split(&key, 2, 3).unwrap();
+        let blob = seal_share(PASS, &shares[0]).unwrap();
+
+        let result = open_share("wrong but long enough passphrase", &blob);
+        assert!(matches!(result, Err(StorageError::DecryptionFailed)));
+    }
+
+    #[test]
+    fn share_tampered_index_fails_closed() {
+        // Index/threshold are inside the AEAD envelope, so tampering with
+        // them is caught by the tag check just like tampering the value.
+        let key = PrivateKey::generate();
+        let shares = wallet_crypto::shamir::split(&key, 2, 3).unwrap();
+        let mut blob = seal_share(PASS, &shares[0]).unwrap();
+        let last = blob.len() - 1;
+        blob[last] ^= 0x01;
+
+        let result = open_share(PASS, &blob);
+        assert!(matches!(result, Err(StorageError::DecryptionFailed)));
+    }
+
+    #[test]
+    fn share_file_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("share.dat");
+        let key = PrivateKey::generate();
+        let public_key = key.public_key();
+        let mut shares = wallet_crypto::shamir::split(&key, 2, 3).unwrap();
+
+        save_share_to_file(&path, PASS, &shares[0]).unwrap();
+        let restored = load_share_from_file(&path, PASS).unwrap();
+        shares[0] = restored;
+
+        let result = wallet_crypto::shamir::reconstruct_and_verify(&shares[0..2], &public_key).unwrap();
+        assert_eq!(result.public_key(), public_key);
     }
 }

@@ -11,8 +11,29 @@
 //! possible: reconstruct, sign, drop the key, *then* verify the result —
 //! nothing after the drop still touches the reconstructed key.
 
-use wallet_crypto::keys::{PublicKey, Signature};
-use wallet_crypto::shamir::{reconstruct_and_verify, Share, ShamirError};
+use wallet_crypto::keys::{PrivateKey, PublicKey, Signature};
+use wallet_crypto::shamir::{self, reconstruct_and_verify, Share, ShamirError};
+
+/// Generate a fresh private key and immediately split it into `n` Shamir
+/// shares, returning only the group public key and the shares.
+///
+/// This is the trusted-dealer DKG ceremony, and this function *is* the
+/// dealer: the full private key is created, split, and dropped (zeroized,
+/// unlocked) inside this one call — it is never returned to the caller.
+/// This closes a real gap in just calling `PrivateKey::generate()` then
+/// `split()` separately: nothing would stop a caller from holding onto
+/// that full key for a while before splitting it (or forgetting to split
+/// it at all), which defeats the entire point of the threshold model.
+/// Routing key generation through this function instead means the full
+/// key's lifetime is provably bounded to one function call, not left to
+/// caller discipline.
+pub fn generate_and_split_key(threshold: u8, n: u8) -> Result<(PublicKey, Vec<Share>), ShamirError> {
+    let key = PrivateKey::generate();
+    let public_key = key.public_key();
+    let shares = shamir::split(&key, threshold, n)?;
+    // `key` drops here — zeroized, unlocked — before returning.
+    Ok((public_key, shares))
+}
 
 /// Errors from a threshold signing ceremony.
 #[derive(Debug)]
@@ -47,7 +68,6 @@ pub fn sign_with_shares(shares: &[Share], expected_public_key: &PublicKey, diges
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wallet_crypto::keys::PrivateKey;
     use wallet_crypto::shamir::split;
 
     /// Not a real hash — just a deterministic, distinct 32-byte stand-in
@@ -135,6 +155,28 @@ mod tests {
 
         let result = sign_with_shares(&shares[0..2], &public_key, &d);
         assert!(matches!(result, Err(CeremonyError::Reconstruction(ShamirError::ReconstructionMismatch))));
+    }
+
+    #[test]
+    fn generated_and_split_key_can_sign_through_the_ceremony() {
+        let (public_key, shares) = generate_and_split_key(2, 3).unwrap();
+        let d = digest(b"dkg-generated key signs fine");
+
+        let sig = sign_with_shares(&shares[0..2], &public_key, &d).unwrap();
+        assert!(public_key.verify_prehash(&d, &sig));
+    }
+
+    #[test]
+    fn generate_and_split_key_propagates_threshold_validation() {
+        assert_eq!(generate_and_split_key(1, 3).unwrap_err(), ShamirError::ThresholdTooSmall);
+        assert_eq!(generate_and_split_key(4, 3).unwrap_err(), ShamirError::ThresholdExceedsParties);
+    }
+
+    #[test]
+    fn two_dkg_ceremonies_produce_independent_keys() {
+        let (public_key_a, _) = generate_and_split_key(2, 3).unwrap();
+        let (public_key_b, _) = generate_and_split_key(2, 3).unwrap();
+        assert_ne!(public_key_a, public_key_b);
     }
 
     #[test]
