@@ -4,3 +4,4 @@
 //! `wallet-storage` / `wallet-rpc`), so it stays unit-testable without mocks.
 
 pub mod ceremony;
+pub mod policy;
