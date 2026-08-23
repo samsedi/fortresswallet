@@ -48,3 +48,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: bash scripts/check_boundaries.sh
+
+  release:
+    name: Release profile (overflow-checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The `test` job above runs in the debug profile, which already
+      # panics on integer overflow regardless of Cargo.toml — it can
+      # never catch a regression to [profile.release]'s
+      # `overflow-checks = true`, and it never even compiles the release
+      # profile. This job is what actually exercises both: if someone
+      # deletes overflow-checks, or a release-only cfg breaks, this is
+      # the job that goes red.
+      - run: cargo test --workspace --release

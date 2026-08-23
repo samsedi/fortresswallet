@@ -15,6 +15,15 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 pub mod keys;
 pub mod shamir;
 
+/// SHA-256 of `bytes`. Exposed so downstream crates (`wallet-core`, when
+/// hashing a `wallet-decoder`-validated transaction before signing) don't
+/// need their own hash-function dependency — reuses `k256`'s already-
+/// present `sha2` re-export rather than pulling in a second copy.
+pub fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use k256::sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
+}
+
 /// A fixed-size secret buffer that zeroizes on drop and never leaks its
 /// contents through Debug/Display.
 #[derive(Zeroize, ZeroizeOnDrop)]

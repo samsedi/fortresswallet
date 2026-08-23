@@ -53,6 +53,13 @@ pub enum CeremonyError {
 /// Sign `digest` using exactly `threshold` shares of a Shamir-split key.
 /// The reconstructed private key exists only for the span of one
 /// `sign_prehash` call inside this function — see the module docs.
+///
+/// This is a low-level primitive: it signs whatever 32 bytes it's given,
+/// with no requirement that they came from a decoded transaction. That's
+/// deliberate — protocol-internal code, tests, and non-transaction
+/// signing needs all go through this. It is NOT the entry point for
+/// spending funds; a real wallet frontend should call `sign_transaction`
+/// instead, which enforces decode-before-sign. See the module docs.
 pub fn sign_with_shares(shares: &[Share], expected_public_key: &PublicKey, digest: &[u8; 32]) -> Result<Signature, CeremonyError> {
     let key = reconstruct_and_verify(shares, expected_public_key).map_err(CeremonyError::Reconstruction)?;
     let signature = key.sign_prehash(digest);
@@ -63,6 +70,29 @@ pub fn sign_with_shares(shares: &[Share], expected_public_key: &PublicKey, diges
     } else {
         Err(CeremonyError::SignatureSelfCheckFailed)
     }
+}
+
+/// Errors from `sign_transaction`.
+#[derive(Debug)]
+pub enum TransactionSigningError {
+    /// `raw_tx` failed to decode — see `wallet_decoder::DecodeError`.
+    /// This is the fail-closed path: a failed decode never reaches
+    /// signing, there is no "sign the raw bytes anyway" fallback.
+    Decode(wallet_decoder::DecodeError),
+    /// Decoding succeeded, but the ceremony itself failed — see
+    /// `CeremonyError`.
+    Ceremony(CeremonyError),
+}
+
+/// The entry point for spending funds: decode `raw_tx` first (fail
+/// closed on anything unrecognized — see `wallet_decoder`'s module docs),
+/// then sign the canonical hash of what was actually decoded, never the
+/// caller-supplied raw bytes directly. There is no code path in this
+/// function that reaches `sign_with_shares` without a successful decode.
+pub fn sign_transaction(raw_tx: &[u8], shares: &[Share], expected_public_key: &PublicKey) -> Result<Signature, TransactionSigningError> {
+    let decoded = wallet_decoder::decode(raw_tx).map_err(TransactionSigningError::Decode)?;
+    let digest = wallet_crypto::sha256(&decoded.canonical_bytes());
+    sign_with_shares(shares, expected_public_key, &digest).map_err(TransactionSigningError::Ceremony)
 }
 
 #[cfg(test)]
@@ -177,6 +207,44 @@ mod tests {
         let (public_key_a, _) = generate_and_split_key(2, 3).unwrap();
         let (public_key_b, _) = generate_and_split_key(2, 3).unwrap();
         assert_ne!(public_key_a, public_key_b);
+    }
+
+    #[test]
+    fn sign_transaction_signs_a_well_formed_transfer() {
+        let (public_key, shares) = generate_and_split_key(2, 3).unwrap();
+        let raw_tx = wallet_decoder::encode_transfer(1, [0xAB; 20], 42);
+
+        let sig = sign_transaction(&raw_tx, &shares[0..2], &public_key).unwrap();
+
+        let decoded = wallet_decoder::decode(&raw_tx).unwrap();
+        let digest = wallet_crypto::sha256(&decoded.canonical_bytes());
+        assert!(public_key.verify_prehash(&digest, &sig));
+    }
+
+    #[test]
+    fn sign_transaction_refuses_garbage_bytes() {
+        // The core guarantee: garbage that fails to decode must never
+        // reach signing, regardless of how many valid shares are handed
+        // to this call.
+        let (public_key, shares) = generate_and_split_key(2, 3).unwrap();
+        let garbage = b"\xff\xff\xff not a real transaction";
+
+        let result = sign_transaction(garbage, &shares[0..2], &public_key);
+        assert!(matches!(result, Err(TransactionSigningError::Decode(_))));
+    }
+
+    #[test]
+    fn sign_transaction_refuses_transactions_with_calldata() {
+        // Same fail-closed path, exercised through the transaction
+        // signing entry point rather than calling wallet_decoder directly.
+        let (public_key, shares) = generate_and_split_key(2, 3).unwrap();
+        let mut raw_tx = wallet_decoder::encode_transfer(1, [0xAB; 20], 42);
+        let len = raw_tx.len();
+        raw_tx[len - 2..].copy_from_slice(&4u16.to_be_bytes());
+        raw_tx.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+
+        let result = sign_transaction(&raw_tx, &shares[0..2], &public_key);
+        assert!(matches!(result, Err(TransactionSigningError::Decode(_))));
     }
 
     #[test]

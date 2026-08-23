@@ -16,6 +16,15 @@ edition = "2024"
 # crates — they're internal implementation crates of one wallet binary.
 publish = false
 
+# Rust silently wraps integer arithmetic in release builds by default —
+# every u128/u64/usize computation in this workspace (transaction values,
+# offsets, share indices, ...) would wrap instead of panicking under
+# `cargo build --release` without this. Debug builds already panic on
+# overflow; this makes release match, at a small perf cost this project
+# accepts for the safety.
+[profile.release]
+overflow-checks = true
+
 # Every crate that touches key material inherits these lints as errors,
 # not warnings, so an unsafe-in-the-wrong-place slip fails the build.
 [workspace.lints.rust]

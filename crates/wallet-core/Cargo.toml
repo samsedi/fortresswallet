@@ -9,3 +9,4 @@ workspace = true
 
 [dependencies]
 wallet-crypto = { path = "../wallet-crypto" }
+wallet-decoder = { path = "../wallet-decoder" }
