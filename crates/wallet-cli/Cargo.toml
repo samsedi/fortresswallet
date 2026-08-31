@@ -13,5 +13,12 @@ path = "src/main.rs"
 
 [dependencies]
 wallet-core = { path = "../wallet-core" }
+# Direct wallet-rpc dependency is deliberate: wallet-core has no network
+# I/O by design (see its module docs), so the CLI is the layer that
+# fetches nonce/fees/balance and broadcasts. Only the two crates holding
+# key material are off limits for a direct CLI dependency (see
+# check_boundaries.sh) — wallet-rpc carries none.
+wallet-rpc = { path = "../wallet-rpc" }
+clap = { version = "4", features = ["derive"] }
 rpassword = "7"
 zeroize = "1"

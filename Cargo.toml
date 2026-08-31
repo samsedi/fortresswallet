@@ -6,7 +6,7 @@ members = [
     "crates/wallet-storage",
     "crates/wallet-decoder",
     "crates/wallet-rpc",
-    "crates/wallet-cli",
+    "crates/wallet-cli", "crates/wallet-ffi",
 ]
 
 [workspace.package]

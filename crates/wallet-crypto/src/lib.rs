@@ -24,6 +24,15 @@ pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
+/// Keccak-256 of `bytes` — the pre-standardization Keccak padding Ethereum
+/// uses, *not* NIST SHA3-256 (a different, incompatible padding scheme
+/// despite the similar name). Needed for EVM addresses (keccak of the
+/// uncompressed public key) and EIP-1559 transaction signing hashes.
+pub fn keccak256(bytes: &[u8]) -> [u8; 32] {
+    use sha3::{Digest, Keccak256};
+    Keccak256::digest(bytes).into()
+}
+
 /// A fixed-size secret buffer that zeroizes on drop and never leaks its
 /// contents through Debug/Display.
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -160,6 +169,33 @@ impl CryptoRng for SecureRng {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test-only hex decoder so these known-vector tests don't need to add
+    /// a `hex` crate dependency to this deliberately minimal crate.
+    fn decode_hex_32(s: &str) -> [u8; 32] {
+        assert_eq!(s.len(), 64, "expected a 32-byte hex vector");
+        let mut out = [0u8; 32];
+        for i in 0..32 {
+            out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn keccak256_matches_known_ethereum_vector() {
+        // keccak256("") — go-ethereum's well-known `EmptyCodeHash`
+        // constant. Confirms we're using Keccak padding, not NIST-final
+        // SHA3-256 (which hashes "" to a different value).
+        let expected = decode_hex_32("c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
+        assert_eq!(keccak256(b""), expected);
+    }
+
+    #[test]
+    fn keccak256_of_abc() {
+        // keccak256("abc"), a widely-published test vector.
+        let expected = decode_hex_32("4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45");
+        assert_eq!(keccak256(b"abc"), expected);
+    }
 
     #[test]
     fn secret_bytes_debug_is_redacted() {

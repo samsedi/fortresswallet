@@ -8,3 +8,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# RLP encode/decode mechanics only (length-prefix framing) — this crate
+# still owns the EIP-1559 field layout itself explicitly; see src/evm.rs.
+# Never add wallet-crypto here: the decoder must not touch key material.
+alloy-rlp = { version = "0.3", default-features = false, features = ["std"] }

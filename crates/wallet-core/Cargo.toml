@@ -10,3 +10,7 @@ workspace = true
 [dependencies]
 wallet-crypto = { path = "../wallet-crypto" }
 wallet-decoder = { path = "../wallet-decoder" }
+wallet-storage = { path = "../wallet-storage" }
+
+[dev-dependencies]
+tempfile = "3"

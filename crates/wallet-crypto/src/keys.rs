@@ -28,6 +28,11 @@ use k256::ecdsa::{SigningKey, VerifyingKey};
 /// type via `wallet_crypto::keys::Signature` without adding `k256` as
 /// their own direct dependency — k256 stays fully contained here.
 pub use k256::ecdsa::Signature;
+/// Re-exported alongside `Signature` for the same reason — EVM signed
+/// transactions embed this as `v`/`y_parity`, so `wallet-core`/
+/// `wallet-decoder` need to name the type without depending on `k256`
+/// themselves.
+pub use k256::ecdsa::RecoveryId;
 
 use crate::SecureRng;
 
@@ -99,6 +104,21 @@ impl PrivateKey {
             .expect("prehash signing over a fixed-length digest cannot fail")
     }
 
+    /// Sign a 32-byte precomputed digest, deterministically (RFC 6979, same
+    /// as `sign_prehash`), additionally returning the recovery id needed to
+    /// recover the public key from `(digest, Signature)` alone — required
+    /// for EVM transactions, which embed this as `v`/`y_parity` instead of
+    /// carrying the sender's public key directly.
+    ///
+    /// # Panics
+    /// Never in practice: the only failure mode of the underlying signer
+    /// is a wrong-length digest, and `digest` is fixed at 32 bytes here.
+    pub fn sign_prehash_recoverable(&self, digest: &[u8; 32]) -> (Signature, RecoveryId) {
+        self.key
+            .sign_prehash_recoverable(digest)
+            .expect("recoverable prehash signing over a fixed-length digest cannot fail")
+    }
+
     /// Raw scalar bytes, for encrypted storage. `pub(crate)` isn't usable
     /// here — `wallet-storage` is a *different* crate and needs to call
     /// this to seal the key — so the "don't reach for this casually"
@@ -141,6 +161,36 @@ impl PublicKey {
     /// SEC1-encoded (compressed) public key bytes.
     pub fn to_sec1_bytes(&self) -> Vec<u8> {
         self.0.to_sec1_bytes().to_vec()
+    }
+
+    /// Reconstruct a `PublicKey` from SEC1-encoded bytes (compressed or
+    /// uncompressed) — the inverse of `to_sec1_bytes`, for reloading a
+    /// wallet's public key from storage. The public key is not secret, so
+    /// this has none of `PrivateKey::from_bytes_dangerous`'s handling
+    /// concerns.
+    pub fn from_sec1_bytes(bytes: &[u8]) -> Result<Self, InvalidKeyBytes> {
+        VerifyingKey::from_sec1_bytes(bytes).map(Self).map_err(|_| InvalidKeyBytes)
+    }
+
+    /// SEC1-encoded uncompressed public key bytes (`0x04 || x || y`, 65
+    /// bytes). EVM addresses are `keccak256` of the 64 bytes *after* the
+    /// `0x04` prefix — callers must strip it themselves, this returns the
+    /// full SEC1 encoding.
+    pub fn to_uncompressed_sec1_bytes(&self) -> [u8; 65] {
+        let point = self.0.to_encoded_point(false);
+        let mut out = [0u8; 65];
+        out.copy_from_slice(point.as_bytes());
+        out
+    }
+
+    /// Recover the public key that produced `sig` over `digest`, given the
+    /// recovery id from `PrivateKey::sign_prehash_recoverable`. Used both
+    /// to verify a recoverable signature and, in EVM contexts, to recover
+    /// a transaction sender's address from a signed transaction alone.
+    pub fn recover_from_prehash(digest: &[u8; 32], sig: &Signature, recovery_id: RecoveryId) -> Result<Self, InvalidKeyBytes> {
+        VerifyingKey::recover_from_prehash(digest, sig, recovery_id)
+            .map(Self)
+            .map_err(|_| InvalidKeyBytes)
     }
 }
 
@@ -201,6 +251,37 @@ mod tests {
         let sig1 = sk.sign_prehash(&digest(b"message A"));
         let sig2 = sk.sign_prehash(&digest(b"message B"));
         assert_ne!(sig1, sig2);
+    }
+
+    #[test]
+    fn recoverable_signature_recovers_the_signing_public_key() {
+        let sk = PrivateKey::generate();
+        let pk = sk.public_key();
+        let d = digest(b"recoverable signing round trip");
+
+        let (sig, recovery_id) = sk.sign_prehash_recoverable(&d);
+        let recovered = PublicKey::recover_from_prehash(&d, &sig, recovery_id).unwrap();
+        assert_eq!(recovered, pk);
+    }
+
+    #[test]
+    fn recoverable_signature_matches_plain_sign_prehash() {
+        // Same deterministic (r, s) either way — the recoverable variant
+        // only adds the recovery id, it doesn't change the signature.
+        let sk = PrivateKey::generate();
+        let d = digest(b"same signature either API");
+
+        let plain = sk.sign_prehash(&d);
+        let (recoverable, _) = sk.sign_prehash_recoverable(&d);
+        assert_eq!(plain, recoverable);
+    }
+
+    #[test]
+    fn uncompressed_pubkey_is_65_bytes_starting_with_0x04() {
+        let sk = PrivateKey::generate();
+        let bytes = sk.public_key().to_uncompressed_sec1_bytes();
+        assert_eq!(bytes[0], 0x04);
+        assert_eq!(bytes.len(), 65);
     }
 
     #[test]

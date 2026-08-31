@@ -26,6 +26,8 @@
 
 use std::fmt;
 
+pub mod evm;
+
 const CURRENT_VERSION: u8 = 1;
 const HEADER_LEN: usize = 1 + 8 + 20 + 16 + 2; // version + chain_id + to + value + data_len
 /// Sanity cap on total input size, independent of the `data_len` field

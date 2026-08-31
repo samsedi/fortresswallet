@@ -34,6 +34,21 @@ if grep -q 'wallet-storage' crates/wallet-cli/Cargo.toml; then
     fail=1
 fi
 
+# wallet-ffi must NOT directly depend on wallet-crypto or wallet-storage
+# (it should go through wallet-core only) — same rule as wallet-cli, since
+# both are outermost consumers, not orchestrators.
+if grep -q 'wallet-crypto' crates/wallet-ffi/Cargo.toml; then
+    echo "❌ BOUNDARY VIOLATION: wallet-ffi directly depends on wallet-crypto"
+    echo "   The FFI bridge should access crypto only through wallet-core."
+    fail=1
+fi
+
+if grep -q 'wallet-storage' crates/wallet-ffi/Cargo.toml; then
+    echo "❌ BOUNDARY VIOLATION: wallet-ffi directly depends on wallet-storage"
+    echo "   The FFI bridge should access storage only through wallet-core."
+    fail=1
+fi
+
 if [ "$fail" -eq 0 ]; then
     echo "✅ All dependency boundaries respected."
 fi

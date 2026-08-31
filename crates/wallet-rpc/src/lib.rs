@@ -22,9 +22,13 @@
 //!      - TLS certificate pinning (no MITM)
 //!
 //! `cross_check` below is deliberately synchronous and takes its query
-//! function as a parameter for now — there is no real client yet to make
-//! it worth being `async`. It should become `async fn` calling an actual
-//! HTTP/JSON-RPC client once one exists.
+//! function as a parameter — this crate's real client (`evm::JsonRpcClient`)
+//! is itself blocking/synchronous, not `async`, matching the rest of this
+//! workspace: nothing else here is async, and a CLI wallet has no
+//! throughput requirement that would justify pulling an async runtime
+//! through `wallet-core`/`wallet-cli`.
+
+pub mod evm;
 
 /// A chain RPC endpoint. Just an identifier for now — no connection state
 /// until a real network client lands in Phase 7.
@@ -77,6 +81,38 @@ impl<T: Clone + PartialEq> Untrusted<T> {
         }
         Ok(self.value)
     }
+
+    /// Like `cross_check`, but for a real network query that can itself
+    /// fail (connection refused, timeout, malformed response, ...) rather
+    /// than the infallible `Fn(&Endpoint) -> T` `cross_check` assumes.
+    /// `evm::JsonRpcClient`'s methods are all fallible, so this is the
+    /// variant real callers use; `cross_check` stays as-is for callers
+    /// (and tests) where the query genuinely cannot fail.
+    pub fn try_cross_check<E>(self, others: &[Endpoint], query: impl Fn(&Endpoint) -> Result<T, E>) -> Result<T, CrossCheckError<E>> {
+        for endpoint in others {
+            let value = query(endpoint).map_err(|e| CrossCheckError::Query(endpoint.clone(), e))?;
+            if value != self.value {
+                return Err(CrossCheckError::Disagreement(RpcDisagreement {
+                    primary: self.source.clone(),
+                    disagreeing: endpoint.clone(),
+                }));
+            }
+        }
+        Ok(self.value)
+    }
+}
+
+/// Errors from `Untrusted::try_cross_check`: either a secondary
+/// endpoint's query itself failed, or it succeeded but disagreed with
+/// the primary value.
+#[derive(Debug)]
+pub enum CrossCheckError<E> {
+    /// Querying `.0` for the same value failed with `.1` — this is not
+    /// evidence of disagreement, just an unreachable/erroring endpoint,
+    /// but it still means the value could not be corroborated.
+    Query(Endpoint, E),
+    /// Two endpoints returned different answers — see `RpcDisagreement`.
+    Disagreement(RpcDisagreement),
 }
 
 /// Two RPC endpoints returned different answers for the same
@@ -110,6 +146,33 @@ mod tests {
 
         let result = balance.cross_check(&others, |_| 100u64);
         assert_eq!(result.unwrap(), 100);
+    }
+
+    #[test]
+    fn try_cross_check_succeeds_when_all_endpoints_agree() {
+        let balance = Untrusted::new(100u64, endpoint("node-a"));
+        let others = [endpoint("node-b"), endpoint("node-c")];
+
+        let result = balance.try_cross_check::<()>(&others, |_| Ok(100u64));
+        assert_eq!(result.unwrap(), 100);
+    }
+
+    #[test]
+    fn try_cross_check_reports_disagreement_distinct_from_query_failure() {
+        let balance = Untrusted::new(100u64, endpoint("node-a"));
+        let others = [endpoint("node-b")];
+
+        let result = balance.try_cross_check::<()>(&others, |_| Ok(999u64));
+        assert!(matches!(result, Err(CrossCheckError::Disagreement(_))));
+    }
+
+    #[test]
+    fn try_cross_check_reports_query_failure_distinct_from_disagreement() {
+        let balance = Untrusted::new(100u64, endpoint("node-a"));
+        let others = [endpoint("node-b")];
+
+        let result = balance.try_cross_check(&others, |_| Err::<u64, &str>("connection refused"));
+        assert!(matches!(result, Err(CrossCheckError::Query(_, "connection refused"))));
     }
 
     #[test]

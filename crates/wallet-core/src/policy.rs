@@ -19,16 +19,12 @@
 //! `wallet-storage` if it needs to survive a restart. That integration
 //! is deliberately out of scope here.
 //!
-//! Known limitation: `evaluate`/`record_approved` key spending limits and
-//! history purely by destination and value — `chain_id` is ignored, so
-//! (for example) 10 wei to the same address on two different chains is
-//! tracked as one combined total rather than two independent ones. Not
-//! dangerous today since nothing in this wallet yet actually signs for
-//! more than one chain, but this would need to become chain_id-aware
-//! (per-chain limits/history, not global ones) before real multi-chain
-//! support lands — implementing that now, with only one chain format to
-//! test it against, would be guessing at the right shape rather than
-//! building it correctly.
+//! `evaluate`/`record_approved` key spending history and known
+//! destinations by `(chain_id, address)`, not address alone — 10 wei to
+//! the same address on two different chains is tracked as two
+//! independent totals, since the same 20-byte address can be controlled
+//! by a different party on a different chain. This became load-bearing
+//! once real multi-chain (EVM) support landed; see `wallet_core::evm`.
 
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
@@ -107,11 +103,17 @@ pub enum DenialReason {
 /// struct.
 pub struct PolicyEngine {
     config: PolicyConfig,
-    /// (approval time, value) for every transaction `record_approved` has
-    /// been called on. Pruned eagerly in `record_approved`, the only
-    /// mutation point — see O-1 in this crate's audit history.
-    history: Vec<(SystemTime, u128)>,
-    known_destinations: HashSet<[u8; 20]>,
+    /// (approval time, `chain_id`, value) for every transaction
+    /// `record_approved` has been called on. Pruned eagerly in
+    /// `record_approved`, the only mutation point — see O-1 in this
+    /// crate's audit history. Keyed by `chain_id` as well as time so the
+    /// velocity limit tracks each chain's spending independently — see
+    /// the module docs' note on this crate's former known limitation.
+    history: Vec<(SystemTime, u64, u128)>,
+    /// `(chain_id, address)` — a destination known on one chain is *not*
+    /// automatically known on another, since the same 20-byte address can
+    /// be controlled by a different party on a different chain.
+    known_destinations: HashSet<(u64, [u8; 20])>,
 }
 
 impl PolicyEngine {
@@ -134,8 +136,10 @@ impl PolicyEngine {
         let window_total: u128 = self
             .history
             .iter()
-            .filter(|(t, _)| now.duration_since(*t).is_ok_and(|age| age <= self.config.window))
-            .map(|(_, v)| v)
+            .filter(|(t, chain_id, _)| {
+                *chain_id == tx.chain_id && now.duration_since(*t).is_ok_and(|age| age <= self.config.window)
+            })
+            .map(|(_, _, v)| v)
             .sum();
 
         // saturating_add: an attacker-controlled tx.value near u128::MAX
@@ -145,7 +149,7 @@ impl PolicyEngine {
             return PolicyDecision::Denied(DenialReason::ExceedsVelocityLimit);
         }
 
-        let is_new_destination = !self.known_destinations.contains(&tx.to);
+        let is_new_destination = !self.known_destinations.contains(&(tx.chain_id, tx.to));
         if tx.value >= self.config.timelock_threshold || is_new_destination {
             let release_at = now + self.config.timelock_delay;
             return PolicyDecision::Queued { release_at };
@@ -159,13 +163,13 @@ impl PolicyEngine {
     /// `Approved` decision, since the ceremony itself can still fail
     /// after policy approval (wrong shares, etc.).
     pub fn record_approved(&mut self, tx: &DecodedTransaction, now: SystemTime) {
-        self.history.push((now, tx.value));
-        self.known_destinations.insert(tx.to);
+        self.history.push((now, tx.chain_id, tx.value));
+        self.known_destinations.insert((tx.chain_id, tx.to));
         // Prune eagerly here (the only mutation point) rather than only
         // filtering lazily in evaluate() — without this, a long-running
         // wallet's history grows without bound, one entry per approved
         // transaction, forever.
-        self.history.retain(|(t, _)| now.duration_since(*t).is_ok_and(|age| age <= self.config.window));
+        self.history.retain(|(t, _, _)| now.duration_since(*t).is_ok_and(|age| age <= self.config.window));
     }
 }
 

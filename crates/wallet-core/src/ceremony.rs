@@ -13,7 +13,7 @@
 
 use std::time::SystemTime;
 
-use wallet_crypto::keys::{PrivateKey, PublicKey, Signature};
+use wallet_crypto::keys::{PrivateKey, PublicKey, RecoveryId, Signature};
 use wallet_crypto::shamir::{self, reconstruct_and_verify, Share, ShamirError};
 
 use crate::policy::{DenialReason, PolicyDecision, PolicyEngine};
@@ -71,6 +71,25 @@ pub fn sign_with_shares(shares: &[Share], expected_public_key: &PublicKey, diges
 
     if expected_public_key.verify_prehash(digest, &signature) {
         Ok(signature)
+    } else {
+        Err(CeremonyError::SignatureSelfCheckFailed)
+    }
+}
+
+/// Same contract as `sign_with_shares`, additionally returning the
+/// recovery id — needed for chains (EVM) whose signed transaction format
+/// embeds it instead of the signer's public key. See `wallet_core::evm`.
+pub fn sign_with_shares_recoverable(
+    shares: &[Share],
+    expected_public_key: &PublicKey,
+    digest: &[u8; 32],
+) -> Result<(Signature, RecoveryId), CeremonyError> {
+    let key = reconstruct_and_verify(shares, expected_public_key).map_err(CeremonyError::Reconstruction)?;
+    let (signature, recovery_id) = key.sign_prehash_recoverable(digest);
+    drop(key);
+
+    if expected_public_key.verify_prehash(digest, &signature) {
+        Ok((signature, recovery_id))
     } else {
         Err(CeremonyError::SignatureSelfCheckFailed)
     }

@@ -8,3 +8,21 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# Blocking HTTP client, deliberately not async — see the plan doc for why.
+# rustls backend pinned to the aws-lc-rs crypto provider: `ring` is
+# hard-banned in deny.toml (workspace standardizes on RustCrypto), and
+# openssl/openssl-sys are banned too (pure Rust crypto only). Must be
+# verified with `cargo deny check` — a banned transitive crypto backend
+# sneaking in here would mean reworking this dependency entirely.
+# rustls-webpki-roots supplies the actual root CA data behind ureq's
+# default RootCerts::WebPki — without it, RootCerts::WebPki is selected
+# but empty, and ureq *panics* (not a normal Err) the first time it
+# actually needs to validate a TLS chain. Learned this the hard way: a
+# panic here happened inside the wallet-ffi `extern "C"` boundary, which
+# can't unwind, so it aborted the entire host process instead of
+# returning an error — see wallet-ffi's `invoke()` for the defensive fix
+# that keeps that class of bug from taking the whole app down again.
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

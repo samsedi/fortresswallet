@@ -144,6 +144,17 @@ pub fn reconstruct_and_verify(shares: &[Share], expected_public_key: &PublicKey)
     Ok(key)
 }
 
+/// Reconstruct the private key from exactly `threshold`-many shares with
+/// no cross-check against a known public key. For first-time import onto
+/// a new device there is no known-good public key yet to verify against —
+/// the caller derives one from the result instead. See the module docs:
+/// shares from an unrelated split still "reconstruct" here, silently, into
+/// a wrong key. Prefer `reconstruct_and_verify` whenever the expected
+/// public key is already known.
+pub fn reconstruct_unverified(shares: &[Share]) -> Result<PrivateKey, ShamirError> {
+    reconstruct(shares)
+}
+
 fn reconstruct(shares: &[Share]) -> Result<PrivateKey, ShamirError> {
     if shares.is_empty() {
         return Err(ShamirError::WrongShareCount);

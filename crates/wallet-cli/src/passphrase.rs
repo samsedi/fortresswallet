@@ -20,13 +20,6 @@ use zeroize::Zeroizing;
 
 /// Prompt on the terminal with echo disabled and return the passphrase
 /// wrapped for automatic zeroization on drop.
-///
-/// `#[expect(dead_code)]` rather than `#[allow(dead_code)]`: this is
-/// unused only until the CLI grows an unlock/sign command that calls it —
-/// `expect` will itself start erroring (unfulfilled expectation) the
-/// moment that wiring lands and this suppression is no longer needed,
-/// so it can't be forgotten and left stale.
-#[expect(dead_code)]
 pub(crate) fn read_passphrase(prompt: &str) -> Zeroizing<String> {
     let pass = rpassword::prompt_password(prompt).expect("failed to read passphrase from terminal");
     Zeroizing::new(pass)

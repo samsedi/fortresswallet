@@ -15,6 +15,7 @@ zeroize = { version = "1", features = ["derive"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng", "getrandom"] }
 rand_core = { version = "0.6", default-features = false }
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "std"] }
+sha3 = { version = "0.10", default-features = false, features = ["std"] }
 region = "3"
 
 [dev-dependencies]
