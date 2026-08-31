@@ -21,7 +21,7 @@ use std::path::Path;
 
 use wallet_crypto::keys::{InvalidKeyBytes, PublicKey};
 use wallet_crypto::shamir::{Share, ShamirError};
-use wallet_storage::StorageError;
+pub use wallet_storage::StorageError;
 
 use crate::ceremony;
 

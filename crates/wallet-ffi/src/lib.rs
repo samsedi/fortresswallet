@@ -594,14 +594,14 @@ fn describe_wallet_error(e: &WalletError) -> String {
     }
 }
 
-fn describe_storage_error(e: &wallet_storage::StorageError) -> String {
+fn describe_storage_error(e: &wallet_core::wallet::StorageError) -> String {
     match e {
-        wallet_storage::StorageError::DecryptionFailed => "wrong passphrase — the passphrase you entered does not match the one used to create this wallet".to_string(),
-        wallet_storage::StorageError::WeakPassphrase => "passphrase too short — must be at least 12 characters".to_string(),
-        wallet_storage::StorageError::Truncated => "wallet file is corrupted or truncated".to_string(),
-        wallet_storage::StorageError::InvalidKeyBytes => "wallet file contains invalid key data".to_string(),
-        wallet_storage::StorageError::UnsupportedVersion(v) => format!("wallet file uses unsupported format version {v}"),
-        wallet_storage::StorageError::Io(io_err) => format!("filesystem error: {io_err}"),
+        wallet_core::wallet::StorageError::DecryptionFailed => "wrong passphrase — the passphrase you entered does not match the one used to create this wallet".to_string(),
+        wallet_core::wallet::StorageError::WeakPassphrase => "passphrase too short — must be at least 12 characters".to_string(),
+        wallet_core::wallet::StorageError::Truncated => "wallet file is corrupted or truncated".to_string(),
+        wallet_core::wallet::StorageError::InvalidKeyBytes => "wallet file contains invalid key data".to_string(),
+        wallet_core::wallet::StorageError::UnsupportedVersion(v) => format!("wallet file uses unsupported format version {v}"),
+        wallet_core::wallet::StorageError::Io(io_err) => format!("filesystem error: {io_err}"),
     }
 }
 

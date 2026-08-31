@@ -1230,7 +1230,6 @@ dependencies = [
  "tempfile",
  "wallet-core",
  "wallet-rpc",
- "wallet-storage",
  "zeroize",
 ]
 
