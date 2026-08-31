@@ -125,6 +125,7 @@ pub fn build_unsigned_transfer(
 }
 
 /// Build an unsigned EIP-1559 contract call (e.g. for an ERC20 transfer).
+#[allow(clippy::too_many_arguments)]
 pub fn build_unsigned_contract_call(
     chain_id: u64,
     to: [u8; 20],
