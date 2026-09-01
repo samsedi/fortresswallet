@@ -8,6 +8,10 @@ There is no backend database and no centralized key custody. Mnemonic generation
 
 [**Download Fortress Wallet APK (Android)**](./fortress.apk)
 
+## 🎨 Flutter UI App
+The frontend user interface built with Flutter is maintained in a separate repository.
+[**View FortressWallet Flutter App**](https://github.com/samsedi/frotress-)
+
 ## Contents
 - [Features](#features)
 - [Architecture](#architecture)
